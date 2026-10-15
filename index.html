@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f7f9f6" />
+  <title>ScripVigil — Stock Market Analysis &amp; Surveillance</title>
+  <meta name="description" content="ScripVigil is an academic prototype for stock market analysis, variable-period anomaly detection and market surveillance." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e96b43'/%3E%3Cpath d='M14 42 L25 31 L34 37 L49 19' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M39 19 H49 V29' fill='none' stroke='%23c4a56b' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+    <div class="market-ribbon" aria-label="Illustrative market pulse">
+      <div class="market-ribbon-inner">
+        <span class="market-ribbon-label"><i class="pulse-dot"></i> MARKET PULSE <b>· SAMPLE SNAPSHOT</b></span>
+        <span class="ribbon-quote"><strong>NIFTY 50</strong><b>25,864.40</b><em class="up">+0.82%</em></span>
+        <span class="ribbon-quote"><strong>SENSEX</strong><b>84,381.10</b><em class="up">+0.67%</em></span>
+        <span class="ribbon-quote"><strong>BANK NIFTY</strong><b>56,912.25</b><em class="up">+0.38%</em></span>
+        <span class="ribbon-quote"><strong>NIFTY IT</strong><b>42,188.60</b><em class="down">−0.21%</em></span>
+        <span class="ribbon-update">Illustrative values · not live index quotes</span>
+      </div>
+    </div>
+      <div class="header-main">
+        <a class="brand" href="#" aria-label="ScripVigil home" onclick="return false;">
+          <div class="brand-mark" aria-hidden="true"><span>SV</span></div>
+          <div class="brand-copy">
+            <div class="brand-name">ScripVigil</div>
+            <div class="brand-sub">Stock market analysis &amp; surveillance</div>
+          </div>
+        </a>
+
+        <div class="search-wrap header-search">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="globalSearch" placeholder="Search a stock or symbol…" autocomplete="off" aria-label="Search stock" />
+          <div class="search-suggestions hidden" id="searchSuggestions"></div>
+        </div>
+
+        <div class="header-actions">
+          <span class="data-mode-pill" id="dataModePill">
+  <i></i>
+  <span id="dataModeText">Demo data · Checking API...</span>
+</span>
+          <button class="icon-button theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle light and dark theme">☾</button>
+          <button class="icon-button" id="notificationBtn" title="Open alerts" aria-label="Open alerts">♧<span class="notification-badge">!</span></button>
+          <button class="icon-button mobile-menu" id="mobileMenu" aria-label="Toggle navigation" title="Menu">☰</button>
+          <div class="profile">
+            <div class="avatar">SV</div>
+            <div class="profile-text"><strong>Analyst view</strong><small>Academic prototype</small></div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="nav" id="sidebar" aria-label="Main navigation">
+        <button class="nav-item active" data-page="dashboard"><span>⌂</span> Overview</button>
+        <button class="nav-item" data-page="stocks"><span>↗</span> Stock Analysis</button>
+        <button class="nav-item" data-page="directory"><span>⌕</span> Company Directory</button>
+        <button class="nav-item" data-page="forecast"><span>⌁</span> Market Trends</button>
+        <button class="nav-item" data-page="surveillance"><span>◎</span> Surveillance</button>
+        <button class="nav-item" data-page="alerts"><span>⚑</span> Alerts &amp; Reviews</button>
+        <button class="nav-item" data-page="reports"><span>▤</span> Reports</button>
+        <button class="nav-item" data-page="methodology"><span>ⓘ</span> About &amp; Method</button>
+      </nav>
+    </header>
+
+    <main class="main">
+      <div class="page-content" id="pageContent" aria-live="polite"></div>
+      <footer class="site-footer">
+        <div class="footer-brand"><span class="footer-mark">SV</span><strong>ScripVigil</strong></div>
+        <span>Stock market analysis &amp; surveillance · Academic prototype</span>
+        <span>Market values in this version are illustrative demo data.</span>
+      </footer>
+    </main>
+  </div>
+
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+  <div class="modal-backdrop hidden" id="modalBackdrop" role="dialog" aria-modal="true" aria-label="Details">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
