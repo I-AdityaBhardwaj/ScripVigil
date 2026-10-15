@@ -8,7 +8,12 @@ window.SCRIPTVIGIL_CONFIG = {
   // Logo.dev browser-safe CDN publishable key. Paste your pk_ key here. Never use the sk_ secret key.
   logoDevPublishableKey: 'pk_V0HyaUN6SQCIpg9r_BTs0A',
   dataMode: 'hybrid', // Demo fallbacks remain; provider-backed chart data is shown only after a successful API response.
-  apiBaseUrl: 'https://scripvigil.onrender.com/api',
+  apiBaseUrl: (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1'
+  )
+  ? 'http://127.0.0.1:8000/api'
+  : 'https://scripvigil.onrender.com/api',
   defaultLookbackDays: 20,
   lookbackOptions: [5, 10, 20, 30, 60],
   currency: 'INR',
