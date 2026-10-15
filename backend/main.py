@@ -765,7 +765,7 @@ DIRECTORY_SOURCES = {
     "NSE": "https://www.nseindia.com/static/market-data/securities-available-for-trading",
     "NSE_EQUITY_CSV": "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
     "NSE_SME_CSV": "https://nsearchives.nseindia.com/emerge/corporates/content/SME_EQUITY_L.csv",
-    "BSE": "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData_new/w",
+    "BSE": "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w",
 }
 
 _directory_items = []
@@ -987,7 +987,7 @@ def _fetch_bse_directory():
     """
     params = {
         "Group": "",
-        "Scripcode": "",
+        "scripcode": "",
         "industry": "",
         "segment": "Equity",
         "status": "Active",
