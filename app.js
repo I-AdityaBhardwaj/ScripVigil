@@ -18,7 +18,7 @@ const stocks = [
 ];
 
 const CONFIG = window.SCRIPTVIGIL_CONFIG || { defaultLookbackDays:20, lookbackOptions:[5,10,20,30,60], apiBaseUrl:'http://127.0.0.1:8000/api', dataMode:'demo' };
-const state = { page:'dashboard', selected:'RELIANCE', selectedListing:null, timeframe:'1M', lookbackDays:CONFIG.defaultLookbackDays || 20, providerSelection:null, providerChartCandles:null, providerChartKey:null, providerChartUpdatedAt:null, providerChartTicker:null, providerChartSource:null, chartPlotModel:null, chartHoverIndex:null, directoryUniverse:[], directoryUniverseFetchedAt:0, directoryUniverseComplete:false, directoryUniverseError:null, surveillanceView:[], surveillanceQuery:'', surveillanceExchange:'ALL', surveillancePage:0, surveillancePageSize:50, reviewRecords:[] };
+const state = { page:'dashboard', selected:'RELIANCE', selectedListing:null, timeframe:'1M', lookbackDays:CONFIG.defaultLookbackDays || 20, providerSelection:null, providerChartCandles:null, providerChartKey:null, providerChartUpdatedAt:null, providerChartTicker:null, providerChartSource:null, chartPlotModel:null, chartHoverIndex:null, chartRequestId:0, directoryUniverse:[], directoryUniverseFetchedAt:0, directoryUniverseComplete:false, directoryUniverseError:null, surveillanceView:[], surveillanceQuery:'', surveillanceExchange:'ALL', surveillancePage:0, surveillancePageSize:50, reviewRecords:[] };
 const pageContent = document.getElementById('pageContent');
 const globalSearch = document.getElementById('globalSearch');
 const searchSuggestions = document.getElementById('searchSuggestions');
@@ -64,18 +64,39 @@ function companyLogoUrl(kind, value, size=96) {
   const params = new URLSearchParams({token, size:String(size), format:'webp', fallback:'404'});
   return `https://img.logo.dev/${kind}/${encodedValue}?${params.toString()}`;
 }
+const COMPANY_LOGO_DOMAINS = {
+  TCS: 'tcs.com',
+  INFY: 'infosys.com',
+  RELIANCE: 'ril.com',
+  HDFCBANK: 'hdfcbank.com',
+  ICICIBANK: 'icicibank.com',
+  SUNPHARMA: 'sunpharma.com',
+  MARUTI: 'marutisuzuki.com',
+  TATASTEEL: 'tatasteel.com',
+  ITC: 'itcportal.com'
+};
+function companyLogoDomain(item) {
+  const symbol = String(item?.symbol || item?.trading_symbol || '').trim().toUpperCase();
+  return COMPANY_LOGO_DOMAINS[symbol] || '';
+}
 function renderCompanyLogo(item, sizeClass='medium', size=96) {
   const name = companyDisplayName(item);
   const initials = initialsForCompany(item);
   const ticker = companyTickerForLogo(item);
   const isin = String(item?.isin || '').trim().toUpperCase();
-  const tickerUrl = companyLogoUrl('ticker', ticker, size);
-  const image = tickerUrl
-    ? `<img class="company-logo-image" src="${escapeHtml(tickerUrl)}" data-logo-stage="ticker" alt="" aria-hidden="true" loading="lazy" decoding="async" />`
+  const domain = companyLogoDomain(item);
+  // Prefer a vetted official domain for known companies. Some logo providers can
+  // return an imprecise match for ISIN lookups; domain-first avoids a wrong-brand logo.
+  // For other listings, use ISIN and then the exchange ticker as fallbacks.
+  const logoKind = domain ? 'domain' : (isin ? 'isin' : 'ticker');
+  const logoValue = domain || isin || ticker;
+  const logoUrl = companyLogoUrl(logoKind, logoValue, size);
+  const image = logoUrl
+    ? `<img class="company-logo-image" src="${escapeHtml(logoUrl)}" data-logo-stage="${escapeHtml(logoKind)}" data-logo-attempts="${escapeHtml(logoKind)}" alt="" aria-hidden="true" loading="lazy" decoding="async" />`
     : '';
-  return `<span class="company-logo ${escapeHtml(sizeClass)}" role="img" aria-label="${escapeHtml(name)} logo" title="${escapeHtml(name)}" data-logo-ticker="${escapeHtml(ticker)}" data-logo-isin="${escapeHtml(isin)}"><span class="company-logo-fallback" aria-hidden="true">${escapeHtml(initials)}</span>${image}</span>`;
+  return `<span class="company-logo ${escapeHtml(sizeClass)}" role="img" aria-label="${escapeHtml(name)} logo" title="${escapeHtml(name)}" data-logo-ticker="${escapeHtml(ticker)}" data-logo-isin="${escapeHtml(isin)}" data-logo-domain="${escapeHtml(domain)}"><span class="company-logo-fallback" aria-hidden="true">${escapeHtml(initials)}</span>${image}</span>`;
 }
-// Switch a failed ticker logo to its ISIN lookup, then keep the styled local initials fallback.
+// Try each known identity once if Logo.dev doesn't have the preferred lookup.
 document.addEventListener('load', event => {
   const image = event.target;
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('company-logo-image')) return;
@@ -86,14 +107,20 @@ document.addEventListener('error', event => {
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('company-logo-image')) return;
   const wrapper = image.closest('.company-logo');
   if (!wrapper) { image.remove(); return; }
-  const isin = wrapper.dataset.logoIsin || '';
-  if (image.dataset.logoStage !== 'isin' && isin) {
-    const isinUrl = companyLogoUrl('isin', isin, 96);
-    if (isinUrl) {
-      image.dataset.logoStage = 'isin';
-      image.src = isinUrl;
-      return;
-    }
+  const attempted = new Set(String(image.dataset.logoAttempts || image.dataset.logoStage || '').split(',').filter(Boolean));
+  const options = [
+    ['domain', wrapper.dataset.logoDomain || ''],
+    ['ticker', wrapper.dataset.logoTicker || ''],
+    ['isin', wrapper.dataset.logoIsin || '']
+  ];
+  const next = options.find(([kind, value]) => value && !attempted.has(kind));
+  if (next) {
+    const [kind, value] = next;
+    attempted.add(kind);
+    image.dataset.logoAttempts = [...attempted].join(',');
+    image.dataset.logoStage = kind;
+    image.src = companyLogoUrl(kind, value, 96);
+    return;
   }
   wrapper.classList.remove('logo-loaded');
   wrapper.classList.add('logo-unavailable');
@@ -118,7 +145,13 @@ function listingKey(listing) {
 function analysisKey(listing, days=state.lookbackDays) {
   return `${listingKey(listing)}:${Number(days)}`;
 }
-function activeListing() { return state.selectedListing || null; }
+function activeListing() {
+  const listing = state.selectedListing || null;
+  // A previous directory selection must never override a different stock selected
+  // in the demo/dashboard view.
+  if (listing && state.selected && String(listing.symbol || '').toUpperCase() !== String(state.selected).toUpperCase()) return null;
+  return listing;
+}
 function currentAnalysisEntry() {
   const listing = activeListing();
   return listing ? (providerAnalysisCache.get(analysisKey(listing, state.lookbackDays)) || null) : null;
@@ -178,10 +211,13 @@ function setSelectedListing(listing) {
   state.selected = listing.symbol;
   state.providerSelection = listing;
   if (changed) {
+    // Invalidate any request still in flight for the previous selection immediately.
+    state.chartRequestId += 1;
     state.providerChartCandles = null;
     state.providerChartKey = null;
     state.providerChartTicker = null;
     state.providerChartSource = null;
+    state.providerChartUpdatedAt = null;
     state.chartHoverIndex = null;
   }
   try { localStorage.setItem(SELECTED_LISTING_STORAGE_KEY, JSON.stringify(listing)); } catch (_) {}
@@ -553,7 +589,7 @@ function renderDashboard() {
     <div class="market-terminal-grid">
       <section class="card terminal-chart-card">
         <div class="terminal-chart-head">
-          <div class="terminal-security-title">${renderCompanyLogo(state.selectedListing || {...selected, exchange: 'NSE', ticker: selected.symbol + '.NS'}, 'market-stock-avatar large', 96)}<div><div class="terminal-symbol-line"><strong>${escapeHtml(selected.symbol)}</strong><span class="badge ${trendLabel(selected).cls}">${trendLabel(selected).label}</span></div><small>${escapeHtml(selected.name)} · NSE illustrative listing</small></div></div>
+          <div class="terminal-security-title">${renderCompanyLogo(activeListing() || {...selected, exchange: 'NSE', ticker: selected.symbol + '.NS'}, 'market-stock-avatar large', 96)}<div><div class="terminal-symbol-line"><strong>${escapeHtml(selected.symbol)}</strong><span class="badge ${trendLabel(selected).cls}">${trendLabel(selected).label}</span></div><small>${escapeHtml(selected.name)} · NSE illustrative listing</small></div></div>
           <div class="terminal-quick-actions"><button class="icon-button chart-refresh-button" id="refreshChartBtn" title="Refresh selected chart" aria-label="Refresh chart">↻</button><button class="btn" data-go="stocks" data-stock="${selected.symbol}">Full analysis ↗</button></div>
         </div>
         <div class="terminal-price-row"><div><strong class="terminal-price">${money(selected.price)}</strong><span class="terminal-change ${selected.change>=0?'up':'down'}">${signed(selected.change)} <small>sample session</small></span></div><div class="chart-provider-status" id="chartDataStatus"><span class="status-dot idle"></span> Connecting to historical provider…</div></div>
@@ -1329,7 +1365,11 @@ function currentChartSelection() {
 
 async function refreshMainChartData({quiet = true} = {}) {
   const canvas = document.getElementById('mainChart');
-  if (!canvas || canvas.dataset.refreshing === '1') return;
+  if (!canvas) return;
+  // Never let an older response from a previously selected company overwrite the
+  // current chart. New selections may start a request even while an old one runs.
+  const requestId = ++state.chartRequestId;
+  const pageAtStart = state.page;
   const selection = currentChartSelection();
   const status = document.getElementById('chartDataStatus');
   const sourceLabel = document.getElementById('chartSourceLabel');
@@ -1346,6 +1386,7 @@ async function refreshMainChartData({quiet = true} = {}) {
   canvas.dataset.refreshing = '1';
   if (status && !state.providerChartCandles) status.innerHTML = '<span class="status-dot idle"></span> Checking provider…';
 
+  const stillCurrent = () => requestId === state.chartRequestId && pageAtStart === state.page && key === `${currentChartSelection().key}:${state.timeframe}`;
   try {
     const url = new URL(`${CONFIG.apiBaseUrl}/market/yahoo-chart`);
     url.searchParams.set('symbol', selection.symbol);
@@ -1357,6 +1398,24 @@ async function refreshMainChartData({quiet = true} = {}) {
       const detail = data?.detail;
       throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail ?? `HTTP ${response.status}`));
     }
+    if (!stillCurrent()) return;
+
+    // Fail closed if the provider returns candles belonging to a different symbol.
+    // This prevents a stale or misrouted response (for example JIOFIN.NS while TCS
+    // is selected) from changing the displayed company price and chart labels.
+    const requestedSymbol = String(selection.symbol || '').trim().toUpperCase().replace(/\.(NS|BO)$/i, '');
+    const responseSymbol = String(data.symbol || '').trim().toUpperCase().replace(/\.(NS|BO)$/i, '');
+    const responseTicker = String(data.ticker || '').trim().toUpperCase();
+    if (responseSymbol && responseSymbol !== requestedSymbol) {
+      throw new Error(`Provider symbol mismatch: requested ${requestedSymbol}, received ${responseSymbol}.`);
+    }
+    if (String(selection.exchange || '').toUpperCase() === 'NSE' && responseTicker) {
+      const tickerBase = responseTicker.replace(/\.NS$/i, '');
+      if (!responseTicker.endsWith('.NS') || tickerBase !== requestedSymbol) {
+        throw new Error(`Provider ticker mismatch: requested ${requestedSymbol}.NS, received ${responseTicker}.`);
+      }
+    }
+
     const candles = Array.isArray(data.candles) ? data.candles.filter(c => Number.isFinite(Number(c.close))) : [];
     if (candles.length < 2) throw new Error('Provider returned fewer than two chart records.');
     state.providerChartCandles = candles;
@@ -1377,7 +1436,7 @@ async function refreshMainChartData({quiet = true} = {}) {
       activeChange.classList.toggle('up', percentMove >= 0);
       activeChange.classList.toggle('down', percentMove < 0);
     }
-    if (status) status.innerHTML = `<span class="status-dot ok"></span> Provider data · refresh attempt every 60s`;
+    if (status) status.innerHTML = '<span class="status-dot ok"></span> Provider data · refresh attempt every 60s';
     if (status) status.title = `Latest response: ${state.providerChartUpdatedAt.toLocaleString()} · ${data.delay_notice || 'Availability and latency depend on the provider.'}`;
     if (sourceLabel) sourceLabel.textContent = `${state.providerChartTicker} · ${data.interval || state.timeframe} · ${state.providerChartUpdatedAt.toLocaleTimeString()}`;
     const first = document.getElementById('chartStartLabel');
@@ -1386,6 +1445,7 @@ async function refreshMainChartData({quiet = true} = {}) {
     if (last) last.textContent = candles[candles.length - 1].timestamp || candles[candles.length - 1].date || 'Latest';
     drawChart();
   } catch (error) {
+    if (!stillCurrent()) return;
     if (!state.providerChartCandles) {
       if (status) status.innerHTML = '<span class="status-dot idle"></span> Sample chart · provider unavailable';
       if (status) status.title = error.message;
@@ -1397,7 +1457,7 @@ async function refreshMainChartData({quiet = true} = {}) {
     if (!quiet) toast(`Chart refresh: ${error.message}`);
     drawChart();
   } finally {
-    delete canvas.dataset.refreshing;
+    if (requestId === state.chartRequestId) delete canvas.dataset.refreshing;
   }
 }
 

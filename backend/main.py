@@ -423,283 +423,439 @@ async def search_instruments(
         "instruments": instruments
     }
 
-def _resolve_yahoo_ticker(symbol: str, exchange: str) -> str:
-    """Resolve a user symbol to Yahoo Finance's usual NSE/BSE ticker format.
+def _resolve_yahoo_ticker_candidates(symbol: str, exchange: str) -> list[str]:
+    """Return valid Yahoo Finance ticker candidates for one selected exchange.
 
-    For BSE, Yahoo commonly uses the numeric BSE security code (e.g. 500180.BO),
-    not necessarily the trading symbol (e.g. HDFCBANK.BO). Use the exchange
-    directory mapping whenever it has been loaded; otherwise allow an explicit
-    numeric BSE code and finally fall back to the supplied text.
+    BSE directory rows store the official numeric scrip code in `ticker` (e.g.
+    532134.BO), but Yahoo also lists many BSE securities under their trading
+    symbol (e.g. BANKBARODA.BO). Try the trading symbol first and then the
+    numeric scrip-code mapping. Never silently switch a BSE request to NSE.
     """
     cleaned = str(symbol or "").strip().upper()
     market = str(exchange or "NSE").strip().upper()
 
+    # An explicit provider suffix is the strongest exchange indicator.
     if cleaned.endswith(".NS"):
-        cleaned = cleaned[:-3]
-        market = "NSE"
+        cleaned, market = cleaned[:-3], "NSE"
     elif cleaned.endswith(".BO"):
-        cleaned = cleaned[:-3]
-        market = "BSE"
+        cleaned, market = cleaned[:-3], "BSE"
 
-    if market == "NSE":
-        return f"{cleaned}.NS"
+    if market not in {"NSE", "BSE"} or not cleaned:
+        return []
 
-    # BSE tickers usually use the numeric scrip/security code.
+    # Make sure the directory lookup has been initialized before matching codes.
+    if not globals().get("_directory_items"):
+        try:
+            _load_directory_cache()
+        except Exception:
+            pass
+
+    suffix = ".NS" if market == "NSE" else ".BO"
+    candidates: list[str] = []
+
+    def add(value: object) -> None:
+        value = str(value or "").strip().upper()
+        if not value:
+            return
+        if value.endswith((".NS", ".BO")):
+            # Enforce the selected exchange; do not mix NSE and BSE price series.
+            if not value.endswith(suffix):
+                return
+            ticker = value
+        else:
+            ticker = value + suffix
+        if ticker not in candidates:
+            candidates.append(ticker)
+
+    # Resolve against the selected exchange's listing rows. Match symbol, code,
+    # provider symbol, Yahoo ticker with/without suffix, and ISIN.
     for item in globals().get("_directory_items", []):
-        if item.get("exchange") != "BSE":
+        if str(item.get("exchange") or "").strip().upper() != market:
             continue
-        candidates = {
-            str(item.get("symbol") or "").strip().upper(),
-            str(item.get("provider_symbol") or "").strip().upper(),
-            str(item.get("security_code") or "").strip().upper(),
-            str(item.get("ticker") or "").strip().upper().removesuffix(".BO"),
-        }
-        if cleaned in candidates:
-            code = str(item.get("security_code") or item.get("provider_symbol") or cleaned).strip().upper()
-            return f"{code}.BO"
 
-    return f"{cleaned}.BO"
+        raw_values = [
+            item.get("symbol"),
+            item.get("trading_symbol"),
+            item.get("provider_symbol"),
+            item.get("security_code"),
+            item.get("ticker"),
+            item.get("isin"),
+        ]
+        identifiers = set()
+        for value in raw_values:
+            value = str(value or "").strip().upper()
+            if not value:
+                continue
+            identifiers.add(value)
+            if value.endswith((".NS", ".BO")):
+                identifiers.add(value[:-3])
+        if cleaned not in identifiers:
+            continue
 
+        # Prefer the exchange's trading symbol when Yahoo supports it.
+        # Keep the scrip code as the fallback because many BSE Yahoo rows use it.
+        trading_symbols = [item.get("symbol"), item.get("trading_symbol")]
+        for value in trading_symbols:
+            value = str(value or "").strip().upper()
+            if value and not value.isdigit():
+                add(value)
+
+        add(item.get("ticker"))
+        add(item.get("provider_symbol"))
+        add(item.get("security_code"))
+        add(cleaned)
+
+    # Unknown/out-of-date symbol: still try the user-supplied exchange-qualified ticker.
+    add(cleaned)
+    return candidates
+
+
+def _resolve_yahoo_ticker(symbol: str, exchange: str) -> str:
+    """Return the preferred ticker; data endpoints try all candidates if needed."""
+    candidates = _resolve_yahoo_ticker_candidates(symbol, exchange)
+    return candidates[0] if candidates else ""
+
+
+def _resolve_tejhq_bse_symbol(symbol: str) -> str:
+    """Resolve a selected BSE listing to its trading symbol for TejHQ EOD data."""
+    cleaned = str(symbol or "").strip().upper()
+    for suffix in (".BO", ".NS"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[:-len(suffix)]
+            break
+
+    if not globals().get("_directory_items"):
+        try:
+            _load_directory_cache()
+        except Exception:
+            pass
+
+    for item in globals().get("_directory_items", []):
+        if str(item.get("exchange") or "").strip().upper() != "BSE":
+            continue
+        identifiers = set()
+        for field in ("symbol", "trading_symbol", "provider_symbol", "security_code", "ticker", "isin"):
+            value = str(item.get(field) or "").strip().upper()
+            if value:
+                identifiers.add(value)
+                if value.endswith((".BO", ".NS")):
+                    identifiers.add(value[:-3])
+        if cleaned in identifiers:
+            display_symbol = str(item.get("symbol") or item.get("trading_symbol") or "").strip().upper()
+            if display_symbol and not display_symbol.isdigit():
+                return display_symbol
+    return cleaned
+
+
+def _fetch_tejhq_bse_history(
+    symbol: str,
+    *,
+    period_days: int = 183,
+    required_columns: tuple[str, ...] = ("Close",),
+):
+    """Fetch BSE end-of-day OHLCV from TejHQ's keyless API, sourced from exchange bhavcopy.
+
+    The API documents BSE bhavcopy coverage from 2024-07-08 onward. This is a
+    fallback only when Yahoo's BSE ticker does not supply enough rows; it never
+    substitutes NSE prices for a BSE request.
+    """
+    import pandas as pd
+
+    exchange_symbol = _resolve_tejhq_bse_symbol(symbol)
+    if not exchange_symbol:
+        raise ValueError("Could not resolve a BSE trading symbol for the fallback provider")
+
+    to_date = date.today()
+    from_date = to_date - timedelta(days=max(90, int(period_days)))
+    url = f"https://api.tejhq.dev/v1/ohlcv/bse/{quote(exchange_symbol, safe='')}"
+    with httpx.Client(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={"Accept": "application/json", "User-Agent": "ScripVigil/1.0"},
+    ) as client:
+        response = client.get(url, params={"from": from_date.isoformat(), "to": to_date.isoformat()})
+        response.raise_for_status()
+        payload = response.json()
+
+    rows = payload.get("data", []) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("TejHQ returned no BSE historical rows for this symbol/date range")
+
+    frame = pd.DataFrame(row for row in rows if isinstance(row, dict))
+    if frame.empty or "date" not in frame.columns:
+        raise ValueError("TejHQ returned an unexpected BSE historical-data format")
+
+    frame["__date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["__date"])
+    rename = {"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
+    frame = frame.rename(columns=rename)
+    for column in ("Open", "High", "Low", "Close"):
+        if column not in frame.columns:
+            raise ValueError(f"TejHQ BSE history is missing the {column} field")
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "Volume" not in frame.columns:
+        frame["Volume"] = 0
+    frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce").fillna(0)
+    frame = frame.set_index("__date").sort_index()
+    frame.index.name = "Date"
+    frame = frame.dropna(subset=list(required_columns))
+    if frame.empty:
+        raise ValueError("TejHQ returned no valid OHLC rows after validation")
+    frame.attrs["scripvigil_provider"] = "TejHQ BSE EOD (official BSE bhavcopy)"
+    return exchange_symbol, frame
+
+
+def _fetch_yahoo_history_for_listing(
+    symbol: str,
+    exchange: str,
+    *,
+    period: str = "6mo",
+    interval: str = "1d",
+    required_columns: tuple[str, ...] = ("Close",),
+    target_rows: int = 1,
+):
+    """Try Yahoo tickers first, then use BSE-source EOD data if Yahoo is too sparse."""
+    candidates = _resolve_yahoo_ticker_candidates(symbol, exchange)
+    attempts = []
+    best_ticker = None
+    best_history = None
+    best_count = -1
+
+    for ticker in candidates:
+        try:
+            frame = yf.Ticker(ticker).history(
+                period=period,
+                interval=interval,
+                auto_adjust=False,
+                actions=False,
+                prepost=False,
+            )
+            if frame is None or frame.empty:
+                attempts.append({"ticker": ticker, "records": 0, "provider": "Yahoo Finance"})
+                continue
+            missing = [column for column in required_columns if column not in frame.columns]
+            if missing:
+                attempts.append({"ticker": ticker, "records": 0, "provider": "Yahoo Finance", "error": "Missing columns: " + ", ".join(missing)})
+                continue
+            frame = frame.dropna(subset=list(required_columns)).sort_index()
+            count = len(frame)
+            attempts.append({"ticker": ticker, "records": count, "provider": "Yahoo Finance"})
+            if count > best_count:
+                best_ticker, best_history, best_count = ticker, frame, count
+            if count >= max(1, int(target_rows)):
+                return ticker, frame, attempts, candidates
+        except Exception as exc:
+            attempts.append({"ticker": ticker, "records": 0, "provider": "Yahoo Finance", "error": f"{type(exc).__name__}: {str(exc)[:120]}"})
+
+    # Yahoo has sparse .BO data for some Indian listings. Use a separate BSE
+    # end-of-day feed if Yahoo failed to satisfy the requested window.
+    if str(exchange or "").strip().upper() == "BSE" and best_count < max(1, int(target_rows)):
+        tejsymbol = _resolve_tejhq_bse_symbol(symbol)
+        try:
+            fallback_symbol, fallback_history = _fetch_tejhq_bse_history(
+                symbol,
+                period_days=183,
+                required_columns=required_columns,
+            )
+            fallback_count = len(fallback_history)
+            attempts.append({
+                "ticker": f"{fallback_symbol}.BO",
+                "records": fallback_count,
+                "provider": "TejHQ BSE EOD (official BSE bhavcopy)",
+            })
+            if fallback_count > best_count:
+                best_ticker = f"{fallback_symbol}.BO"
+                best_history = fallback_history
+                best_count = fallback_count
+            if fallback_count >= max(1, int(target_rows)):
+                return best_ticker, best_history, attempts, candidates
+        except Exception as exc:
+            attempts.append({
+                "ticker": f"{tejsymbol}.BO" if tejsymbol else str(symbol),
+                "records": 0,
+                "provider": "TejHQ BSE EOD (official BSE bhavcopy)",
+                "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+            })
+
+    return best_ticker, best_history, attempts, candidates
 
 @app.get("/api/market/yahoo-history")
 def get_yahoo_history(
     symbol: str,
     exchange: str = "NSE",
-    lookback_days: int = 20
+    lookback_days: int = 20,
 ):
-    symbol = symbol.strip().upper()
-    exchange = exchange.strip().upper()
+    symbol = str(symbol or "").strip().upper()
+    exchange = str(exchange or "NSE").strip().upper()
 
-    # Validate the requested exchange.
     if exchange not in {"NSE", "BSE"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Exchange must be NSE or BSE."
-        )
+        raise HTTPException(status_code=400, detail="Exchange must be NSE or BSE.")
 
-    # Accept a company symbol, with or without a Yahoo suffix.
-    if symbol.endswith(".NS") or symbol.endswith(".BO"):
-        symbol = symbol.rsplit(".", 1)[0]
+    if symbol.endswith((".NS", ".BO")):
+        suffix = symbol[-3:]
+        symbol = symbol[:-3]
+        exchange = "NSE" if suffix == ".NS" else "BSE"
 
-    if (
-        not symbol
-        or len(symbol) > 30
-        or not all(c.isalnum() or c in "&._-" for c in symbol)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Enter a valid stock symbol, such as RELIANCE."
-        )
-
-    # Only allow the supported analysis windows.
+    if not symbol or len(symbol) > 30 or not all(c.isalnum() or c in "&._-" for c in symbol):
+        raise HTTPException(status_code=400, detail="Enter a valid stock symbol, such as RELIANCE.")
     if lookback_days not in {5, 10, 20, 30, 60}:
-        raise HTTPException(
-            status_code=400,
-            detail="Lookback must be 5, 10, 20, 30, or 60."
-        )
+        raise HTTPException(status_code=400, detail="Lookback must be 5, 10, 20, 30, or 60.")
 
-    # Resolve BSE trading symbols through the directory so e.g. HDFCBANK
-    # can map to Yahoo's numeric BSE ticker when the directory is loaded.
-    ticker_symbol = _resolve_yahoo_ticker(symbol, exchange)
+    ticker, history, attempts, candidates = _fetch_yahoo_history_for_listing(
+        symbol,
+        exchange,
+        period="6mo",
+        interval="1d",
+        required_columns=("Open", "High", "Low", "Close"),
+        target_rows=lookback_days,
+    )
 
-    try:
-        history = yf.Ticker(ticker_symbol).history(
-            period="6mo",
-            interval="1d",
-            auto_adjust=False,
-            actions=False
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Yahoo Finance request failed. Please try again."
-        ) from exc
-
-    if history.empty:
+    if history is None or history.empty:
+        attempted = ", ".join(candidates) or symbol
         raise HTTPException(
             status_code=502,
             detail=(
-                f"No historical data returned for {ticker_symbol}. "
-                "Check the symbol or try again later."
-            )
+                f"No historical data returned for {symbol} on {exchange}. "
+                f"Tried Yahoo tickers: {attempted}. "
+                "Coverage can vary by listing; see ticker attempts in the backend logs."
+            ),
         )
 
-    history = (
-        history
-        .dropna(subset=["Open", "High", "Low", "Close"])
-        .sort_index()
-        .tail(lookback_days)
-    )
-
+    history = history.tail(lookback_days)
     candles = []
-
     for timestamp, row in history.iterrows():
         volume_value = row.get("Volume", 0)
-
+        try:
+            volume_number = float(volume_value)
+            if volume_number != volume_number:
+                volume_number = 0.0
+        except (TypeError, ValueError):
+            volume_number = 0.0
         candles.append({
             "date": timestamp.strftime("%Y-%m-%d"),
             "open": round(float(row["Open"]), 2),
             "high": round(float(row["High"]), 2),
             "low": round(float(row["Low"]), 2),
             "close": round(float(row["Close"]), 2),
-            "volume": (
-                int(volume_value)
-                if volume_value is not None
-                and str(volume_value) != "nan"
-                else 0
-            )
+            "volume": int(volume_number),
         })
 
     return {
-        "provider": "Yahoo Finance",
+        "provider": getattr(history, "attrs", {}).get("scripvigil_provider", "Yahoo Finance"),
         "data_status": "historical_provider_data",
         "real_time": False,
         "symbol": symbol,
         "exchange": exchange,
-        "ticker": ticker_symbol,
+        "ticker": ticker,
         "lookback_days": lookback_days,
         "records_returned": len(candles),
+        "ticker_attempts": attempts,
         "candles": candles,
-        "notice": (
-            "Historical data only. Data freshness and availability "
-            "vary; this endpoint does not guarantee real-time quotes."
-        )
+        "notice": "Historical data only. Data freshness and availability vary; this endpoint does not guarantee real-time quotes.",
     }
+
 
 @app.get("/api/market/yahoo-analyze")
 def analyze_yahoo_market(
     symbol: str,
     exchange: str = "NSE",
-    lookback_days: int = 20
+    lookback_days: int = 20,
 ):
-    symbol = symbol.strip().upper()
-    exchange = exchange.strip().upper()
+    symbol = str(symbol or "").strip().upper()
+    exchange = str(exchange or "NSE").strip().upper()
 
     if exchange not in {"NSE", "BSE"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Exchange must be NSE or BSE."
-        )
-
+        raise HTTPException(status_code=400, detail="Exchange must be NSE or BSE.")
+    if symbol.endswith((".NS", ".BO")):
+        suffix = symbol[-3:]
+        symbol = symbol[:-3]
+        exchange = "NSE" if suffix == ".NS" else "BSE"
+    if not symbol or len(symbol) > 30 or not all(c.isalnum() or c in "&._-" for c in symbol):
+        raise HTTPException(status_code=400, detail="Enter a valid stock symbol.")
     if lookback_days not in {5, 10, 20, 30, 60}:
-        raise HTTPException(
-            status_code=400,
-            detail="Lookback must be 5, 10, 20, 30, or 60."
-        )
+        raise HTTPException(status_code=400, detail="Lookback must be 5, 10, 20, 30, or 60.")
 
-    # Normalize the symbol and select the Yahoo ticker.
-    if symbol.endswith(".NS") or symbol.endswith(".BO"):
-        symbol = symbol.rsplit(".", 1)[0]
-
-    if (
-        not symbol
-        or len(symbol) > 30
-        or not all(c.isalnum() or c in "&._-" for c in symbol)
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Enter a valid stock symbol."
-        )
-
-    ticker = _resolve_yahoo_ticker(symbol, exchange)
-
-    try:
-        history = yf.Ticker(ticker).history(
-            period="6mo",
-            interval="1d",
-            auto_adjust=False,
-            actions=False
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to retrieve historical stock data."
-        )
-
-    if history.empty:
-        raise HTTPException(
-            status_code=502,
-            detail=f"No historical data returned for {ticker}."
-        )
-
-    history = (
-        history
-        .dropna(subset=["Close"])
-        .sort_index()
+    ticker, history, attempts, candidates = _fetch_yahoo_history_for_listing(
+        symbol,
+        exchange,
+        period="6mo",
+        interval="1d",
+        required_columns=("Close",),
+        target_rows=lookback_days + 1,
     )
 
-    # One extra close is needed to calculate the latest daily return.
-    window = history.tail(lookback_days + 1)
+    if history is None or history.empty:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"No historical data returned for {symbol} on {exchange}.",
+                "tickers_tried": candidates,
+                "attempts": attempts,
+                "note": "Yahoo Finance has separate exchange tickers; coverage varies by listing.",
+            },
+        )
 
+    history = history.dropna(subset=["Close"]).sort_index()
+    window = history.tail(lookback_days + 1)
     if len(window) < 3:
         raise HTTPException(
             status_code=422,
-            detail="Insufficient records for anomaly analysis."
+            detail={
+                "message": "Insufficient historical records for analysis.",
+                "symbol": symbol,
+                "exchange": exchange,
+                "ticker": ticker,
+                "records_found": len(window),
+                "lookback_days_requested": lookback_days,
+                "tickers_tried": candidates,
+                "attempts": attempts,
+            },
         )
 
     closes = [float(value) for value in window["Close"]]
-    volumes = [
-        float(value) if value == value else 0.0
-        for value in window["Volume"]
-    ]
+    volume_series = history["Volume"] if "Volume" in history.columns else [0.0] * len(history)
+    volume_values = []
+    for value in list(volume_series.tail(lookback_days + 1)):
+        try:
+            number = float(value)
+            volume_values.append(number if number == number else 0.0)
+        except (TypeError, ValueError):
+            volume_values.append(0.0)
+    if len(volume_values) < len(closes):
+        volume_values = [0.0] * (len(closes) - len(volume_values)) + volume_values
+    volumes = volume_values[-len(closes):]
 
     returns = [
         (closes[i] / closes[i - 1] - 1) * 100
         for i in range(1, len(closes))
         if closes[i - 1] != 0
     ]
+    if len(returns) < 2:
+        raise HTTPException(status_code=422, detail="Insufficient price changes for anomaly analysis.")
 
     latest_return = returns[-1]
     previous_returns = returns[:-1]
+    avg_return = statistics.mean(previous_returns) if previous_returns else 0.0
+    return_std = statistics.stdev(previous_returns) if len(previous_returns) >= 2 else 0.0
+    z_score = ((latest_return - avg_return) / return_std) if return_std > 0 else None
 
-    avg_return = statistics.mean(previous_returns)
-    return_std = (
-        statistics.stdev(previous_returns)
-        if len(previous_returns) >= 2 else 0.0
-    )
+    previous_volumes = [value for value in volumes[:-1] if value > 0]
+    avg_volume = statistics.mean(previous_volumes) if previous_volumes else None
+    latest_volume = volumes[-1] if volumes else 0.0
+    volume_ratio = latest_volume / avg_volume if avg_volume and avg_volume > 0 else None
 
-    # A Z-score compares today's move with previous daily moves.
-    z_score = (
-        (latest_return - avg_return) / return_std
-        if return_std > 0 else None
-    )
-
-    previous_volumes = [v for v in volumes[:-1] if v > 0]
-    avg_volume = (
-        statistics.mean(previous_volumes)
-        if previous_volumes else None
-    )
-
-    latest_volume = volumes[-1]
-    volume_ratio = (
-        latest_volume / avg_volume
-        if avg_volume and avg_volume > 0 else None
-    )
-
-    # A transparent heuristic score, not a trained ML probability.
     anomaly_score = None
-
     if z_score is not None and volume_ratio is not None:
         return_component = min(abs(z_score) / 4, 1) * 50
-        volume_component = (
-            min(max(volume_ratio - 1, 0) / 3, 1) * 50
-        )
+        volume_component = min(max(volume_ratio - 1, 0) / 3, 1) * 50
         anomaly_score = round(return_component + volume_component)
 
     flags = []
-
     if z_score is not None and abs(z_score) >= 2:
         flags.append("Unusual daily price movement")
-
     if volume_ratio is not None and volume_ratio >= 1.5:
         flags.append("Elevated trading volume")
-
-    if (
-        z_score is not None
-        and abs(z_score) >= 2
-        and volume_ratio is not None
-        and volume_ratio >= 1.5
-    ):
+    if z_score is not None and abs(z_score) >= 2 and volume_ratio is not None and volume_ratio >= 1.5:
         classification = "High"
     elif flags:
         classification = "Watch"
@@ -707,20 +863,15 @@ def analyze_yahoo_market(
         classification = "Normal"
 
     all_closes = [float(value) for value in history["Close"]]
-
-    sma_5 = (
-        statistics.mean(all_closes[-5:])
-        if len(all_closes) >= 5 else None
-    )
-    sma_20 = (
-        statistics.mean(all_closes[-20:])
-        if len(all_closes) >= 20 else None
-    )
+    sma_5 = statistics.mean(all_closes[-5:]) if len(all_closes) >= 5 else None
+    sma_20 = statistics.mean(all_closes[-20:]) if len(all_closes) >= 20 else None
 
     return {
-        "provider": "Yahoo Finance",
+        "provider": getattr(history, "attrs", {}).get("scripvigil_provider", "Yahoo Finance"),
         "data_status": "historical_provider_data",
         "real_time": False,
+        "symbol": symbol,
+        "exchange": exchange,
         "ticker": ticker,
         "lookback_days": lookback_days,
         "records_used": len(window) - 1,
@@ -730,23 +881,14 @@ def analyze_yahoo_market(
         "sma_20": round(sma_20, 2) if sma_20 is not None else None,
         "return_z_score": round(z_score, 2) if z_score is not None else None,
         "latest_volume": int(latest_volume),
-        "average_previous_volume": (
-            round(avg_volume, 2) if avg_volume is not None else None
-        ),
-        "volume_ratio": (
-            round(volume_ratio, 2) if volume_ratio is not None else None
-        ),
+        "average_previous_volume": round(avg_volume, 2) if avg_volume is not None else None,
+        "volume_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
         "anomaly_score": anomaly_score,
         "classification": classification,
         "surveillance_flags": flags,
-        "method": (
-            "Rule-based screening using historical return variation "
-            "and relative volume. Not a trained ML model."
-        ),
-        "warning": (
-            "Anomaly scores are screening signals, not probabilities "
-            "of insider trading or evidence of wrongdoing."
-        )
+        "ticker_attempts": attempts,
+        "method": "Rule-based screening using historical return variation and relative volume. Not a trained ML model.",
+        "warning": "Anomaly scores are screening signals, not probabilities of insider trading or evidence of wrongdoing.",
     }
 
 

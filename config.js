@@ -12,7 +12,7 @@ window.SCRIPTVIGIL_CONFIG = {
   window.location.hostname === 'localhost' ||
   window.location.hostname === '127.0.0.1'
   )
-  ? 'http://127.0.0.1:8000/api'
+  ? 'http://127.0.0.1:8002/api'
   : 'https://scripvigil.onrender.com/api',
   defaultLookbackDays: 20,
   lookbackOptions: [5, 10, 20, 30, 60],
