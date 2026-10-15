@@ -26,19 +26,21 @@ app = FastAPI(
 
 
 # Allow the website to communicate with the backend.
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://i-adityabhardwaj.github.io",
         "http://127.0.0.1:5500",
         "http://localhost:5500",
         "http://127.0.0.1:5501",
         "http://localhost:5501",
-        "https://i-adityabhardwaj.github.io",
     ],
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
 
 
 @app.get("/")
