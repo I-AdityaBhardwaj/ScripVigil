@@ -108,3 +108,19 @@ The Surveillance page loads the full cached directory using `GET /api/instrument
 ### Updating an existing ScripVigil folder
 
 To preserve exchange-list cache on computers where the directory has already loaded, stop the backend and copy these updated files into the **existing** project folder: `index.html`, `styles.css`, `app.js`, `config.js`, `backend/main.py`, and the documentation files. Keep `backend/.env` private and retain `backend/data/security_directory.json` if it exists. If extracting into a new folder, copy the existing `backend/data/` cache into the new backend folder before starting it. A fresh install may need to redownload the NSE/BSE directory, and an exchange may temporarily reject automated refresh requests.
+
+
+## ScripVigil brand and company logos
+
+This build includes the new ScripVigil shield/market-trend mark as local SVG assets (`assets/scripvigil-mark.svg` and `assets/scripvigil-logo.svg`). Company logos use Logo.dev's stock-ticker image CDN when a publishable key is configured; a local initials fallback stays visible when a logo cannot be found or the key is not configured.
+
+### Configure Logo.dev
+
+1. Open `config.js`.
+2. Set `logoDevPublishableKey` to the **CDN Publishable Key** (`pk_...`) from your Logo.dev dashboard. Do not use the API Secret Key (`sk_...`).
+3. In Logo.dev's key settings, restrict allowed domains to `localhost`, `127.0.0.1`, and your actual GitHub Pages hostname (for this repository it is typically `i-adityabhardwaj.github.io`). Include your custom domain if you use one. Follow the allowed-domain format shown in the Logo.dev dashboard.
+4. Save, refresh the site, and test a few NSE and BSE listings. Logo lookup uses the exchange-specific symbol first and attempts an ISIN lookup where supplied. Unsupported/missing mappings fall back to initials.
+
+The publishable key is designed for browser usage, so it is visible in frontend code once configured. Restrict it by domain. Never place an `sk_...` secret key in this repository.
+
+Logo.dev documents its stock logo URL pattern at https://www.logo.dev/products/stock-ticker-logos. Coverage varies by ticker and exchange; every Indian listing is not guaranteed to have a logo mapping.

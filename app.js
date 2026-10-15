@@ -29,6 +29,77 @@ const providerAnalysisCache = new Map();
 const SELECTED_LISTING_STORAGE_KEY = 'scripvigil-selected-listing-v1';
 const REVIEW_STORAGE_KEY = 'scripvigil-provider-review-records-v1';
 
+// Company identity: Logo.dev uses a browser-safe publishable key, configured in config.js.
+// No secret API key belongs in frontend code. If a provider logo is missing, initials remain.
+function companyDisplayName(item) {
+  return String(item?.company_name || item?.name || item?.symbol || item?.security_code || 'Company');
+}
+function companyTickerForLogo(item) {
+  const exchange = String(item?.exchange || 'NSE').toUpperCase();
+  const symbol = String(item?.symbol || item?.trading_symbol || item?.provider_symbol || '').trim().toUpperCase();
+  const existingTicker = String(item?.ticker || item?.provider_ticker || '').trim().toUpperCase();
+  const suffix = exchange === 'BSE' ? '.BO' : '.NS';
+  const clean = value => value.replace(/\.(NS|BO)$/i, '');
+  // Prefer the real trading symbol, not a numeric BSE security code.
+  if (symbol && !/^\d+$/.test(clean(symbol))) return /\.(NS|BO)$/.test(symbol) ? symbol : symbol + suffix;
+  if (existingTicker && !/^\d+\.(NS|BO)$/.test(existingTicker)) {
+    if (/\.(NS|BO)$/.test(existingTicker)) return existingTicker;
+    return existingTicker + suffix;
+  }
+  if (symbol) return /\.(NS|BO)$/.test(symbol) ? symbol : symbol + suffix;
+  if (existingTicker) return /\.(NS|BO)$/.test(existingTicker) ? existingTicker : existingTicker + suffix;
+  return '';
+}
+function initialsForCompany(item) {
+  const symbol = String(item?.symbol || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+  if (symbol && !/^\d+$/.test(symbol)) return symbol.slice(0, 2);
+  const words = companyDisplayName(item).replace(/\b(limited|ltd|private|pvt|incorporated|inc)\b/gi, '').trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map(word => word[0]).join('') || symbol.slice(0, 2) || 'CO').toUpperCase();
+}
+function companyLogoUrl(kind, value, size=96) {
+  const token = String(CONFIG.logoDevPublishableKey || '').trim();
+  if (!token || token.includes('PASTE_') || token.toLowerCase().includes('your_')) return '';
+  const encodedValue = encodeURIComponent(String(value || '').trim());
+  if (!encodedValue) return '';
+  const params = new URLSearchParams({token, size:String(size), format:'webp', fallback:'404'});
+  return `https://img.logo.dev/${kind}/${encodedValue}?${params.toString()}`;
+}
+function renderCompanyLogo(item, sizeClass='medium', size=96) {
+  const name = companyDisplayName(item);
+  const initials = initialsForCompany(item);
+  const ticker = companyTickerForLogo(item);
+  const isin = String(item?.isin || '').trim().toUpperCase();
+  const tickerUrl = companyLogoUrl('ticker', ticker, size);
+  const image = tickerUrl
+    ? `<img class="company-logo-image" src="${escapeHtml(tickerUrl)}" data-logo-stage="ticker" alt="" aria-hidden="true" loading="lazy" decoding="async" />`
+    : '';
+  return `<span class="company-logo ${escapeHtml(sizeClass)}" role="img" aria-label="${escapeHtml(name)} logo" title="${escapeHtml(name)}" data-logo-ticker="${escapeHtml(ticker)}" data-logo-isin="${escapeHtml(isin)}"><span class="company-logo-fallback" aria-hidden="true">${escapeHtml(initials)}</span>${image}</span>`;
+}
+// Switch a failed ticker logo to its ISIN lookup, then keep the styled local initials fallback.
+document.addEventListener('load', event => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.classList.contains('company-logo-image')) return;
+  image.closest('.company-logo')?.classList.add('logo-loaded');
+}, true);
+document.addEventListener('error', event => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.classList.contains('company-logo-image')) return;
+  const wrapper = image.closest('.company-logo');
+  if (!wrapper) { image.remove(); return; }
+  const isin = wrapper.dataset.logoIsin || '';
+  if (image.dataset.logoStage !== 'isin' && isin) {
+    const isinUrl = companyLogoUrl('isin', isin, 96);
+    if (isinUrl) {
+      image.dataset.logoStage = 'isin';
+      image.src = isinUrl;
+      return;
+    }
+  }
+  wrapper.classList.remove('logo-loaded');
+  wrapper.classList.add('logo-unavailable');
+  image.remove();
+}, true);
+
 try {
   const savedListing = JSON.parse(localStorage.getItem(SELECTED_LISTING_STORAGE_KEY) || 'null');
   if (savedListing && savedListing.symbol && savedListing.exchange) {
@@ -473,7 +544,7 @@ function renderDashboard() {
 
     <div class="market-stocks-grid" id="marketStocksGrid">
       ${featured.map(s => `<button class="market-stock-card" data-go="stocks" data-stock="${s.symbol}" data-sector="${escapeHtml(s.sector)}" type="button">
-        <div class="market-card-top"><div class="market-card-identity"><span class="market-stock-avatar">${escapeHtml(s.symbol.slice(0,1))}</span><span><strong>${escapeHtml(s.symbol)}</strong><small>${escapeHtml(s.name)}</small></span></div><span class="market-favourite" aria-hidden="true">☆</span></div>
+        <div class="market-card-top"><div class="market-card-identity">${renderCompanyLogo({...s, exchange: 'NSE', ticker: s.symbol + '.NS'}, 'market-stock-avatar', 64)}<span><strong>${escapeHtml(s.symbol)}</strong><small>${escapeHtml(s.name)}</small></span></div><span class="market-favourite" aria-hidden="true">☆</span></div>
         <div class="market-card-chart">${miniSparkline(s)}</div>
         <div class="market-card-bottom"><strong>${money(s.price)}</strong><span class="${s.change>=0?'up':'down'}">${s.change>=0?'↗':'↘'} ${signed(s.change)}</span></div>
       </button>`).join('')}
@@ -482,7 +553,7 @@ function renderDashboard() {
     <div class="market-terminal-grid">
       <section class="card terminal-chart-card">
         <div class="terminal-chart-head">
-          <div class="terminal-security-title"><span class="market-stock-avatar large">${escapeHtml(selected.symbol.slice(0,1))}</span><div><div class="terminal-symbol-line"><strong>${escapeHtml(selected.symbol)}</strong><span class="badge ${trendLabel(selected).cls}">${trendLabel(selected).label}</span></div><small>${escapeHtml(selected.name)} · NSE illustrative listing</small></div></div>
+          <div class="terminal-security-title">${renderCompanyLogo(state.selectedListing || {...selected, exchange: 'NSE', ticker: selected.symbol + '.NS'}, 'market-stock-avatar large', 96)}<div><div class="terminal-symbol-line"><strong>${escapeHtml(selected.symbol)}</strong><span class="badge ${trendLabel(selected).cls}">${trendLabel(selected).label}</span></div><small>${escapeHtml(selected.name)} · NSE illustrative listing</small></div></div>
           <div class="terminal-quick-actions"><button class="icon-button chart-refresh-button" id="refreshChartBtn" title="Refresh selected chart" aria-label="Refresh chart">↻</button><button class="btn" data-go="stocks" data-stock="${selected.symbol}">Full analysis ↗</button></div>
         </div>
         <div class="terminal-price-row"><div><strong class="terminal-price">${money(selected.price)}</strong><span class="terminal-change ${selected.change>=0?'up':'down'}">${signed(selected.change)} <small>sample session</small></span></div><div class="chart-provider-status" id="chartDataStatus"><span class="status-dot idle"></span> Connecting to historical provider…</div></div>
@@ -522,7 +593,7 @@ function renderDashboard() {
     <div class="card pad monitored-securities-card">
       <div class="card-title"><div><h3>Monitored securities</h3><small>Click a row to inspect the stock · demo metrics until provider data is loaded</small></div><button class="btn" data-go="directory">Search all NSE + BSE listings →</button></div>
       <div class="table-wrap"><table><thead><tr><th>Stock</th><th>Price (demo)</th><th>Change</th><th>Volume ratio</th><th>Trend</th><th>Anomaly status</th></tr></thead><tbody>
-        ${stocks.map(s=>{const m=getWindowMetrics(s);return `<tr data-stock="${s.symbol}"><td><div class="stock-cell"><div class="stock-logo">${s.symbol.slice(0,2)}</div><div class="stock-name"><strong>${s.symbol}</strong><span>${s.name}</span></div></div></td><td>${money(s.price)}</td><td class="${s.change>=0?'up':'down'}">${signed(s.change)}</td><td>${m.volumeRatio.toFixed(1)}×</td><td>${trendBadge(s)}</td><td>${badge(m.score)}</td></tr>`}).join('')}
+        ${stocks.map(s=>{const m=getWindowMetrics(s);return `<tr data-stock="${s.symbol}"><td><div class="stock-cell">${renderCompanyLogo({...s, exchange: 'NSE', ticker: s.symbol + '.NS'}, 'stock-logo', 64)}<div class="stock-name"><strong>${s.symbol}</strong><span>${s.name}</span></div></div></td><td>${money(s.price)}</td><td class="${s.change>=0?'up':'down'}">${signed(s.change)}</td><td>${m.volumeRatio.toFixed(1)}×</td><td>${trendBadge(s)}</td><td>${badge(m.score)}</td></tr>`}).join('')}
       </tbody></table></div>
     </div>
     <div class="notice warn dashboard-disclaimer"><strong>Data integrity:</strong> index values, stock cards and surveillance sample metrics remain illustrative. Provider-backed chart points are labelled separately. Anomaly signals are review aids, not proof of insider trading.</div>
@@ -841,7 +912,7 @@ function renderDirectoryInstrumentProfile(instrument) {
       '<button class="btn" data-go="directory">← Company directory</button><button class="btn" data-go="forecast">Market trends</button><button class="btn" data-go="surveillance">Surveillance</button><button class="btn" data-go="alerts">Alerts &amp; Reviews</button><button class="btn" data-go="reports">Reports</button>')}
     <div class="card pad" style="margin-bottom:15px">
       <div class="stock-head">
-        <div class="stock-title"><div class="stock-big-logo">${escapeHtml(String(instrument.exchange || 'EQ'))}</div><div><strong style="font-size:17px">${escapeHtml(instrument.company_name || instrument.name || instrument.symbol)}</strong><div class="stock-symbol">${escapeHtml(instrument.symbol)} · ${escapeHtml(instrument.exchange)}${instrument.industry ? ' · ' + escapeHtml(instrument.industry) : ''}</div></div></div>
+        <div class="stock-title">${renderCompanyLogo(instrument, 'stock-big-logo', 128)}<div><strong style="font-size:17px">${escapeHtml(instrument.company_name || instrument.name || instrument.symbol)}</strong><div class="stock-symbol">${escapeHtml(instrument.symbol)} · ${escapeHtml(instrument.exchange)}${instrument.industry ? ' · ' + escapeHtml(instrument.industry) : ''}</div></div></div>
         <span class="badge blue">Exchange directory record</span>
       </div>
       <div class="stats-6" style="margin-top:16px">${tiles || '<div class="notice info">No additional listing metadata was returned for this record.</div>'}</div>
@@ -916,7 +987,7 @@ function renderDirectoryResponse(data) {
     table.innerHTML = `<div class="notice ${directoryState.directoryTotal ? 'info' : 'warn'}">${directoryState.directoryTotal ? 'No listings match this search. Try another company name, symbol, ISIN, or security code.' : 'No exchange records are available yet. Check your internet connection and click “Refresh official lists”.'}</div>`;
   } else {
     table.innerHTML = `<table class="directory-table"><thead><tr><th>Company</th><th>Exchange</th><th>Symbol</th><th>Security code</th><th>ISIN</th><th>Series / group</th><th>Industry</th><th>Listing date</th><th>Face value</th><th>Paid-up value</th><th>Market lot</th><th>Action</th></tr></thead><tbody>${directoryState.results.map((x,i)=>`<tr>
-      <td><strong>${escapeHtml(x.company_name)}</strong><small>${escapeHtml(x.security_type || 'Equity')}</small></td>
+      <td><div class="stock-cell">${renderCompanyLogo(x, 'stock-logo', 64)}<div class="stock-name"><strong>${escapeHtml(x.company_name)}</strong><span>${escapeHtml(x.security_type || 'Equity')}</span></div></div></td>
       <td><span class="badge ${x.exchange==='NSE'?'green':'blue'}">${escapeHtml(x.exchange)}</span></td>
       <td class="mono">${escapeHtml(x.symbol)}</td>
       <td class="mono">${escapeHtml(x.security_code || '—')}</td>
@@ -999,7 +1070,7 @@ ${renderHistoricalAnalysisPanel('NSE')}
 
     <div class="detail-grid">
       <div class="card pad">
-        <div class="stock-head"><div class="stock-title"><div class="stock-big-logo">${s.symbol.slice(0,3)}</div><div><strong style="font-size:16px">${s.symbol}</strong><div class="stock-symbol">${s.name}</div></div></div><div>${trendBadge(s)}</div></div>
+        <div class="stock-head"><div class="stock-title">${renderCompanyLogo({...s, exchange: 'NSE', ticker: s.symbol + '.NS'}, 'stock-big-logo', 128)}<div><strong style="font-size:16px">${s.symbol}</strong><div class="stock-symbol">${s.name}</div></div></div><div>${trendBadge(s)}</div></div>
         <div class="price-big">${money(s.price)}</div><div class="price-change ${s.change>=0?'up':'down'}">${signed(s.change)} on the sample session</div>
         <div class="chart-wrap"><canvas id="mainChart" aria-label="Illustrative stock price chart"></canvas></div>
         <div class="chart-toolbar"><button class="segment ${state.timeframe==='1D'?'active':''}" data-range="1D">1D</button><button class="segment ${state.timeframe==='1W'?'active':''}" data-range="1W">1W</button><button class="segment ${state.timeframe==='1M'?'active':''}" data-range="1M">1M</button><button class="segment ${state.timeframe==='6M'?'active':''}" data-range="6M">6M</button><button class="segment ${state.timeframe==='1Y'?'active':''}" data-range="1Y">1Y</button></div>
@@ -1043,6 +1114,7 @@ function renderMarketTrends() {
       : '<div class="notice info" style="margin-bottom:14px">Trend metrics below use Yahoo Finance historical records when available. Provider data may be delayed and is not a guaranteed live exchange feed.</div>';
   return `
     ${header('Price & market trend analysis', title, subtitle, '<button class="btn" data-go="stocks">← Company details</button><button class="btn primary" data-go="surveillance">Review surveillance</button>')}
+    ${listing ? `<div class="selected-company-logo-row">${renderCompanyLogo(listing, 'company-logo-feature', 128)}<div><strong>${escapeHtml(listing.company_name || listing.symbol)}</strong><small>${escapeHtml(listing.symbol)} · ${escapeHtml(listing.exchange)}${listing.isin ? ' · ISIN ' + escapeHtml(listing.isin) : ''}</small></div></div>` : ''}
     ${statusNotice}
     <div class="grid grid-4" id="trendMetricCards">
       <div class="card metric-card"><div class="metric-top"><span class="metric-label">Latest close</span><span class="metric-icon">₹</span></div><div class="metric-value">${a ? '₹' + value(a.latest_close) : '—'}</div><div class="metric-sub">${listing ? escapeHtml(listing.exchange + ' · ' + listing.symbol) : 'No listing selected'}</div></div>
@@ -1093,7 +1165,7 @@ function renderSurveillance() {
     const itemAnalysis = isCurrent ? a : null;
     const itemLevel = itemAnalysis ? classificationLevel(itemAnalysis.classification) : 'unknown';
     return `<tr data-level="${itemLevel}">
-      <td><div class="stock-cell"><div class="stock-logo">${escapeHtml(String(item.exchange || 'EQ').slice(0,3))}</div><div class="stock-name"><strong>${escapeHtml(item.company_name || item.symbol)}</strong><span>${escapeHtml(item.symbol)}${item.industry ? ' · ' + escapeHtml(item.industry) : ''}</span></div></div></td>
+      <td><div class="stock-cell">${renderCompanyLogo(item, 'stock-logo', 64)}<div class="stock-name"><strong>${escapeHtml(item.company_name || item.symbol)}</strong><span>${escapeHtml(item.symbol)}${item.industry ? ' · ' + escapeHtml(item.industry) : ''}</span></div></div></td>
       <td>${escapeHtml(item.exchange)}</td><td>${escapeHtml(item.isin || '—')}</td>
       <td>${itemAnalysis && itemAnalysis.return_z_score != null ? formatMetric(itemAnalysis.return_z_score) + 'σ' : '—'}</td>
       <td>${itemAnalysis && itemAnalysis.volume_ratio != null ? formatMetric(itemAnalysis.volume_ratio) + '×' : '—'}</td>
@@ -1111,6 +1183,7 @@ function renderSurveillance() {
     : `<div class="notice info" style="margin-top:12px">Loaded ${allRecords.length.toLocaleString('en-IN')} exchange-listing records. Only the selected company is analysed on request; other rows are not screened until selected. Provider history is not guaranteed real-time.</div>`;
   return `
     ${header('NSE + BSE market surveillance', listing ? `${escapeHtml(listing.company_name || listing.symbol)} surveillance review` : 'Listed company surveillance', 'Search the official NSE/BSE directory, select a security, and review its provider-backed screening response.', '<button class="btn" id="scanMarket">↻ Refresh selected analysis</button><button class="btn primary" data-go="alerts">Open Alerts & Reviews</button>')}
+    ${listing ? `<div class="selected-company-logo-row">${renderCompanyLogo(listing, 'company-logo-feature', 128)}<div><strong>${escapeHtml(listing.company_name || listing.symbol)}</strong><small>${escapeHtml(listing.symbol)} · ${escapeHtml(listing.exchange)}${listing.isin ? ' · ISIN ' + escapeHtml(listing.isin) : ''}</small></div></div>` : ''}
     ${sourcesNote}
     <div class="grid grid-4" id="surveillanceSummary">
       <div class="card metric-card"><div class="metric-top"><span class="metric-label">Open review flags</span><span class="metric-icon">⚑</span></div><div class="metric-value ${openRecords.length ? 'down' : ''}">${openRecords.length}</div><div class="metric-sub">Saved provider analyses</div></div>
@@ -1159,10 +1232,11 @@ function renderAlerts() {
   const reviewCards = records.length ? records.map(record => {
     const flags = Array.isArray(record.surveillance_flags) ? record.surveillance_flags : [];
     const isFlagged = ['High','Watch'].includes(record.classification);
-    return `<div class="card report-card"><div class="report-main"><strong>${escapeHtml(record.company_name || record.symbol)} — ${escapeHtml(record.symbol)} (${escapeHtml(record.exchange)})</strong><small>${escapeHtml(record.ticker || 'Provider ticker unavailable')} · ${Number(record.lookback_days || 0)}-session baseline · ${record.analyzed_at ? escapeHtml(new Date(record.analyzed_at).toLocaleString()) : 'Timestamp unavailable'}</small><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap">${classificationBadge(record.classification)}<span class="badge ${record.review_status==='Reviewed'?'green':'blue'}">${escapeHtml(record.review_status || 'Open')}</span>${isFlagged ? `<span class="badge amber">${flags.length} flag(s)</span>` : ''}</div><small>${flags.length ? escapeHtml(flags.join('; ')) : 'No configured screening flags returned.'} · Close ${record.latest_close == null ? '—' : '₹'+formatMetric(record.latest_close)} · Change ${record.daily_change_percent == null ? '—' : signed(record.daily_change_percent)} · Volume ${record.volume_ratio == null ? '—' : formatMetric(record.volume_ratio)+'×'}</small></div><div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn" data-review-open="${escapeHtml(record.id)}" type="button">View company</button><button class="btn" data-review-record="${escapeHtml(record.id)}" type="button">${record.review_status==='Reviewed'?'Reviewed':'Mark reviewed'}</button></div></div>`;
+    return `<div class="card report-card"><div class="report-main"><div class="report-company-identity">${renderCompanyLogo(record, 'stock-logo', 64)}<div><strong>${escapeHtml(record.company_name || record.symbol)} — ${escapeHtml(record.symbol)} (${escapeHtml(record.exchange)})</strong><small>${escapeHtml(record.ticker || 'Provider ticker unavailable')} · ${Number(record.lookback_days || 0)}-session baseline · ${record.analyzed_at ? escapeHtml(new Date(record.analyzed_at).toLocaleString()) : 'Timestamp unavailable'}</small></div></div><div style="margin-top:8px;display:flex;gap:7px;flex-wrap:wrap">${classificationBadge(record.classification)}<span class="badge ${record.review_status==='Reviewed'?'green':'blue'}">${escapeHtml(record.review_status || 'Open')}</span>${isFlagged ? `<span class="badge amber">${flags.length} flag(s)</span>` : ''}</div><small>${flags.length ? escapeHtml(flags.join('; ')) : 'No configured screening flags returned.'} · Close ${record.latest_close == null ? '—' : '₹'+formatMetric(record.latest_close)} · Change ${record.daily_change_percent == null ? '—' : signed(record.daily_change_percent)} · Volume ${record.volume_ratio == null ? '—' : formatMetric(record.volume_ratio)+'×'}</small></div><div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn" data-review-open="${escapeHtml(record.id)}" type="button">View company</button><button class="btn" data-review-record="${escapeHtml(record.id)}" type="button">${record.review_status==='Reviewed'?'Reviewed':'Mark reviewed'}</button></div></div>`;
   }).join('') : '<div class="card pad">No provider-backed company analyses have been saved yet. Choose a company and load its historical analysis; results will be recorded here.</div>';
   return `
     ${header('Alert centre','Alerts & Reviews','Review screening outputs for the currently selected NSE/BSE listing and all saved provider analyses. Select any company from the header search or Company Directory; this page follows that selection. Review status is stored locally in this browser.', '<button class="btn" id="markAllReviewed">Mark visible as reviewed</button><button class="btn primary" data-go="surveillance">Back to surveillance</button>')}
+    ${listing ? `<div class="selected-company-logo-row">${renderCompanyLogo(listing, 'company-logo-feature', 128)}<div><strong>${escapeHtml(listing.company_name || listing.symbol)}</strong><small>${escapeHtml(listing.symbol)} · ${escapeHtml(listing.exchange)}</small></div></div>` : ''}
     <div class="grid grid-3">
       <div class="card metric-card"><div class="metric-top"><span class="metric-label">High / watch flags</span><span class="metric-icon">⚑</span></div><div class="metric-value down">${flagged.length}</div><div class="metric-sub">From saved provider analyses</div></div>
       <div class="card metric-card"><div class="metric-top"><span class="metric-label">Awaiting review</span><span class="metric-icon">◐</span></div><div class="metric-value warn">${open.length}</div><div class="metric-sub">Flagged records not marked reviewed</div></div>
@@ -1179,10 +1253,11 @@ function renderReports() {
   const entry = currentAnalysisEntry();
   const a = entry && entry.data ? entry.data : null;
   const records = [...state.reviewRecords].sort((x,y) => String(y.analyzed_at || '').localeCompare(String(x.analyzed_at || ''))).slice(0,30);
-  const recentRows = records.map(record => `<tr><td>${escapeHtml(record.company_name || record.symbol)}</td><td>${escapeHtml(record.symbol)}</td><td>${escapeHtml(record.exchange)}</td><td>${Number(record.lookback_days || 0)} sessions</td><td>${record.latest_close == null ? '—' : '₹'+formatMetric(record.latest_close)}</td><td>${record.daily_change_percent == null ? '—' : signed(record.daily_change_percent)}</td><td>${record.anomaly_score == null ? '—' : Number(record.anomaly_score) + '/100'}</td><td>${classificationBadge(record.classification)}</td><td>${escapeHtml(record.review_status || 'Open')}</td></tr>`).join('');
+  const recentRows = records.map(record => `<tr><td><div class="stock-cell">${renderCompanyLogo(record, 'stock-logo', 64)}<span>${escapeHtml(record.company_name || record.symbol)}</span></div></td><td>${escapeHtml(record.symbol)}</td><td>${escapeHtml(record.exchange)}</td><td>${Number(record.lookback_days || 0)} sessions</td><td>${record.latest_close == null ? '—' : '₹'+formatMetric(record.latest_close)}</td><td>${record.daily_change_percent == null ? '—' : signed(record.daily_change_percent)}</td><td>${record.anomaly_score == null ? '—' : Number(record.anomaly_score) + '/100'}</td><td>${classificationBadge(record.classification)}</td><td>${escapeHtml(record.review_status || 'Open')}</td></tr>`).join('');
   const previewState = !listing ? 'No official listing selected' : entry?.error ? `Provider response unavailable: ${entry.error}` : a ? `Provider analysis loaded · ${a.ticker || listing.ticker || listing.symbol}` : 'Loading provider analysis…';
   return `
     ${header('Reporting','Market analysis reports','Prepare a print-ready report for the currently selected official NSE/BSE listing and its saved provider-backed surveillance history. Search for a company in the header or Company Directory; its selected listing follows you here.', '<button class="btn" id="exportReportCsv">Export review log CSV</button><button class="btn primary" id="printReport">Print / save as PDF</button>')}
+    ${listing ? `<div class="selected-company-logo-row">${renderCompanyLogo(listing, 'company-logo-feature', 128)}<div><strong>${escapeHtml(listing.company_name || listing.symbol)}</strong><small>${escapeHtml(listing.symbol)} · ${escapeHtml(listing.exchange)}${listing.isin ? ' · ISIN ' + escapeHtml(listing.isin) : ''}</small></div></div>` : ''}
     <div class="grid grid-3">
       <div class="card report-card"><div class="report-main"><strong>Company trend report</strong><small>${listing ? escapeHtml(listing.company_name || listing.symbol) + ' · ' + escapeHtml(listing.exchange) : 'Select a company to prepare report content.'}</small></div><button class="btn" data-action="generate-report">Prepare</button></div>
       <div class="card report-card"><div class="report-main"><strong>Surveillance result</strong><small>${a ? escapeHtml(a.classification || 'Unknown') + ' · ' + (a.anomaly_score == null ? 'No score' : a.anomaly_score + '/100') : 'Awaiting provider-backed analysis'}</small></div><button class="btn" data-action="generate-report">Prepare</button></div>
@@ -1508,7 +1583,7 @@ globalSearch.addEventListener('input', () => {
       if (headerSearchResults.length) {
         searchSuggestions.innerHTML = headerSearchResults.map((item, index) => `
           <div class="suggestion" data-header-directory-index="${index}" role="button" tabindex="0">
-            <div class="suggestion-main"><div class="symbol-box">${escapeHtml(item.exchange)}</div><div><strong>${escapeHtml(item.company_name)}</strong><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}${item.isin ? ' · ' + escapeHtml(item.isin) : ''}</small></div></div><span>→</span>
+            <div class="suggestion-main">${renderCompanyLogo(item, 'symbol-box', 64)}<div><strong>${escapeHtml(item.company_name)}</strong><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}${item.isin ? ' · ' + escapeHtml(item.isin) : ''}</small></div></div><span>→</span>
           </div>`).join('');
         searchSuggestions.querySelectorAll('[data-header-directory-index]').forEach(el => {
           const choose = () => {
@@ -1525,14 +1600,14 @@ globalSearch.addEventListener('input', () => {
           provider_symbol: item.symbol, ticker: `${item.symbol}.NS`, source: 'bundled demo list', demo: true
         }));
         searchSuggestions.innerHTML = headerSearchResults.length ? headerSearchResults.map((item, index) => `
-          <div class="suggestion" data-header-directory-index="${index}"><div class="suggestion-main"><div class="symbol-box">DEMO</div><div><strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company_name)} · Illustrative demo entry</small></div></div><span>→</span></div>`).join('') : '<div class="suggestion"><small style="padding:12px;display:block">No matching listing found. Open Company Directory to check source status.</small></div>';
+          <div class="suggestion" data-header-directory-index="${index}"><div class="suggestion-main">${renderCompanyLogo({...item, exchange: 'NSE', ticker: item.symbol + '.NS'}, 'symbol-box', 64)}<div><strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company_name)} · Illustrative demo entry</small></div></div><span>→</span></div>`).join('') : '<div class="suggestion"><small style="padding:12px;display:block">No matching listing found. Open Company Directory to check source status.</small></div>';
         searchSuggestions.querySelectorAll('[data-header-directory-index]').forEach(el => el.onclick = () => go('stocks', headerSearchResults[Number(el.dataset.headerDirectoryIndex)].symbol));
       }
       searchSuggestions.classList.remove('hidden');
     } catch (error) {
       const demoMatches = stocks.filter(item => item.symbol.toLowerCase().includes(query.toLowerCase()) || item.name.toLowerCase().includes(query.toLowerCase())).slice(0, 5);
       headerSearchResults = demoMatches.map(item => ({ company_name:item.name, symbol:item.symbol, exchange:'NSE', provider_symbol:item.symbol, demo:true }));
-      searchSuggestions.innerHTML = demoMatches.length ? demoMatches.map((item, index) => `<div class="suggestion" data-header-directory-index="${index}"><div class="suggestion-main"><div class="symbol-box">DEMO</div><div><strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company_name)} · Directory offline</small></div></div><span>→</span></div>`).join('') : `<div class="suggestion"><small style="padding:12px;display:block">Directory unavailable: ${escapeHtml(error.message)}</small></div>`;
+      searchSuggestions.innerHTML = demoMatches.length ? demoMatches.map((item, index) => `<div class="suggestion" data-header-directory-index="${index}"><div class="suggestion-main">${renderCompanyLogo({...item, exchange: 'NSE', ticker: item.symbol + '.NS'}, 'symbol-box', 64)}<div><strong>${escapeHtml(item.symbol)}</strong><small>${escapeHtml(item.company_name)} · Directory offline</small></div></div><span>→</span></div>`).join('') : `<div class="suggestion"><small style="padding:12px;display:block">Directory unavailable: ${escapeHtml(error.message)}</small></div>`;
       searchSuggestions.querySelectorAll('[data-header-directory-index]').forEach(el => el.onclick = () => go('stocks', headerSearchResults[Number(el.dataset.headerDirectoryIndex)].symbol));
     }
   }, 250);

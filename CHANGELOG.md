@@ -34,3 +34,11 @@
 - Added a company/exchange search and pagination controls to the Surveillance directory table. Only the selected listing is screened on demand; remaining directory records are marked not screened until analysed.
 - Main chart hover displays the candle date and close price; historical provider data remains clearly distinguished from illustrative sample data.
 - Updated the BSE directory request to use the newer `ListofScripData_new` endpoint and a warmed-up persistent session, preserving cached records when BSE blocks refresh requests.
+
+
+## Branding and company identity update
+
+- Added a custom SVG ScripVigil shield/market-trend logo and wordmark asset.
+- Added Logo.dev ticker/ISIN company logo lookup to dashboard cards, directory results, selected-company panels, surveillance, alerts/reviews, search suggestions, and reports.
+- Added local initials fallback for missing logos or unconfigured provider key.
+- Added Logo.dev attribution in the footer and setup guidance for domain-restricted publishable-key configuration.

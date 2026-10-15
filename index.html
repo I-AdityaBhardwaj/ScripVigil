@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#f7f9f6" />
+  <meta name="theme-color" content="#29262b" />
   <title>ScripVigil — Stock Market Analysis &amp; Surveillance</title>
   <meta name="description" content="ScripVigil is an academic prototype for stock market analysis, variable-period anomaly detection and market surveillance." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e96b43'/%3E%3Cpath d='M14 42 L25 31 L34 37 L49 19' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M39 19 H49 V29' fill='none' stroke='%23c4a56b' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="assets/scripvigil-mark.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="styles.css" />
@@ -26,9 +26,9 @@
     </div>
       <div class="header-main">
         <a class="brand" href="#" aria-label="ScripVigil home" onclick="return false;">
-          <div class="brand-mark" aria-hidden="true"><span>SV</span></div>
+          <div class="brand-mark" aria-hidden="true"><img src="assets/scripvigil-mark.svg" alt="" /></div>
           <div class="brand-copy">
-            <div class="brand-name">ScripVigil</div>
+            <div class="brand-name">Scrip<span>Vigil</span></div>
             <div class="brand-sub">Stock market analysis &amp; surveillance</div>
           </div>
         </a>
@@ -69,9 +69,10 @@
     <main class="main">
       <div class="page-content" id="pageContent" aria-live="polite"></div>
       <footer class="site-footer">
-        <div class="footer-brand"><span class="footer-mark">SV</span><strong>ScripVigil</strong></div>
+        <div class="footer-brand"><span class="footer-mark" aria-hidden="true"><img src="assets/scripvigil-mark.svg" alt="" /></span><strong>ScripVigil</strong></div>
         <span>Stock market analysis &amp; surveillance · Academic prototype</span>
         <span>Market values in this version are illustrative demo data.</span>
+        <span class="logo-attribution">Company logos by <a href="https://www.logo.dev/" target="_blank" rel="noopener noreferrer">Logo.dev</a></span>
       </footer>
     </main>
   </div>

@@ -1,5 +1,4 @@
-
-# Secrets
+# Secrets and environment files
 .env
 .env.*
 !.env.example
@@ -7,7 +6,7 @@ backend/.env
 backend/.env.*
 !backend/.env.example
 
-# Python virtual environments and generated files
+# Python environments and generated files
 .venv/
 venv/
 backend/.venv/
@@ -15,11 +14,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Local stock-directory cache
+# Local exchange directory cache
 backend/data/security_directory.json
 backend/data/*.tmp
 
-# Editor and OS files
+# Editor and operating-system files
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Optional frontend dependencies/build output
+node_modules/
+dist/

@@ -610,3 +610,31 @@ body.theme-dark .market-hero::after { border-color:rgba(239,129,92,.12); }
 .chart-hover-tooltip small { color: var(--muted, #968a84); font-size: 9px; }
 body.theme-dark .chart-hover-tooltip { background: #242328; color: #f3ece8; border-color: #3a353a; box-shadow: 0 10px 28px rgba(0,0,0,.35); }
 body.theme-dark .chart-hover-tooltip span, body.theme-dark .chart-hover-tooltip small { color: #b9aca5; }
+
+
+/* Branded identity + Logo.dev company logo primitives */
+.brand-mark { background: transparent !important; box-shadow: none !important; border-radius: 12px; overflow: hidden; }
+.brand-mark::after { display: none !important; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.footer-mark { background: transparent !important; border-radius: 7px; overflow: hidden; }
+.footer-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.company-logo { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; overflow: hidden; background: #fff; border: 1px solid #f1d9cc; color: #c95333; font: 800 10px var(--font-mono); vertical-align: middle; }
+.company-logo-fallback { display: grid; place-items: center; width: 100%; height: 100%; letter-spacing: -.04em; }
+.company-logo-image { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; padding: 3px; background: #fff; }
+.company-logo.logo-loaded .company-logo-fallback { visibility: hidden; }
+.company-logo.logo-unavailable .company-logo-fallback { visibility: visible; }
+.company-logo.stock-logo { width: 31px; height: 31px; border-radius: 9px; font-size: 9px; }
+.company-logo.stock-big-logo { width: 49px; height: 49px; border-radius: 12px; font-size: 11px; }
+.company-logo.market-stock-avatar { width: 31px; height: 31px; border-radius: 10px; font-size: 10px; background: #fff; }
+.company-logo.market-stock-avatar.large { width: 42px; height: 42px; flex-basis: 42px; border-radius: 11px; font-size: 12px; }
+.company-logo.symbol-box { width: 30px; height: 30px; border-radius: 9px; font-size: 9px; }
+.company-logo.company-logo-feature { width: 54px; height: 54px; border-radius: 14px; font-size: 13px; }
+.selected-company-logo-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 14px; border: 1px solid #eee2dc; border-radius: 13px; background: var(--surface); }
+.selected-company-logo-row strong { display: block; color: var(--text); font-size: 12px; }
+.selected-company-logo-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.report-company-identity { display: flex; align-items: center; gap: 9px; }
+@media (max-width: 650px) { .selected-company-logo-row { padding: 10px; } }
+
+.brand-name span { color: #e96b43; }
+.logo-attribution a { color: #c95333; text-decoration: underline; text-underline-offset: 2px; }
+.logo-attribution { white-space: nowrap; }
