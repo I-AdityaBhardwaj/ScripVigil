@@ -24,9 +24,7 @@ app = FastAPI(
     version="0.1.0"
 )
 
-
-# Allow the website to communicate with the backend.
-
+# Allow the local website to communicate with the backend.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -40,7 +38,6 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
-
 
 
 @app.get("/")
@@ -979,11 +976,13 @@ def _fetch_nse_directory():
 
 
 def _fetch_bse_directory():
-    """Load BSE active equities with one persistent, warmed-up HTTP session.
+    """Fetch BSE active equities using browser-like request headers.
 
-    BSE can reject direct one-shot API requests with 403. Reuse one session for
-    the site landing page and its listing API, and preserve the reason if the
-    exchange still refuses the request. A saved directory cache remains usable.
+    The endpoint is called directly instead of warming up the homepage first,
+    since the homepage itself may be blocked in some hosting environments.
+    BSE can still deny requests based on its own access rules; in that case the
+    directory refresh handler keeps any previously cached BSE rows and exposes
+    the error in the directory status endpoint.
     """
     params = {
         "Group": "",
@@ -991,25 +990,29 @@ def _fetch_bse_directory():
         "industry": "",
         "segment": "Equity",
         "status": "Active",
-        "scripName": "",
     }
     headers = {
-        "Referer": "https://www.bseindia.com/",
-        "Origin": "https://www.bseindia.com",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/134.0.0.0 Safari/537.36"
+        ),
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.bseindia.com",
+        "Referer": "https://www.bseindia.com/corporates/ann.html",
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "Sec-CH-UA": '"Chromium";v="134", "Not:A-Brand";v="99", "Google Chrome";v="134"',
+        "Sec-CH-UA-Mobile": "?0",
+        "Sec-CH-UA-Platform": '"Windows"',
     }
-    standard_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-        **headers,
-    }
-    with httpx.Client(timeout=25.0, follow_redirects=True, headers=standard_headers) as client:
-        try:
-            homepage = client.get("https://www.bseindia.com/", timeout=15.0)
-            homepage.raise_for_status()
-        except httpx.HTTPError:
-            # Some environments block the homepage but permit the data API.
-            pass
+
+    with httpx.Client(timeout=25.0, follow_redirects=True, headers=headers) as client:
         response = client.get(DIRECTORY_SOURCES["BSE"], params=params)
         response.raise_for_status()
         try:
@@ -1018,6 +1021,7 @@ def _fetch_bse_directory():
             raise ValueError(
                 f"BSE active-security API returned non-JSON content (HTTP {response.status_code})"
             ) from exc
+
     records = _parse_bse_payload(payload)
     if len(records) < 100:
         raise ValueError(
@@ -1217,6 +1221,10 @@ def security_directory_status():
         "sources": _directory_source_status,
         "is_complete": all(_directory_source_status.get(ex, {}).get("status") == "loaded" for ex in ("NSE", "BSE")),
         "refresh_error": _directory_last_error,
+        "last_refresh_attempt": (
+            _directory_refreshed_at.isoformat().replace("+00:00", "Z")
+            if _directory_refreshed_at else None
+        ),
     }
 
 
