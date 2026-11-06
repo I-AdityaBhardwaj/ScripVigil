@@ -2,6 +2,8 @@
 
 ScripVigil is a student-project prototype built with plain HTML, CSS and JavaScript plus a Python FastAPI backend. It now includes an exchange-listing directory for **active equity listings on NSE and BSE** and historical stock analysis through Yahoo Finance where that provider supports the selected symbol.
 
+https://i-adityabhardwaj.github.io/ScripVigil/
+
 ## What is included in this update
 
 - **Company Directory page** for NSE + BSE with search by company name, trading symbol, ISIN, or security code.
